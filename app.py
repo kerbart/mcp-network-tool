@@ -422,6 +422,9 @@ def create_http_app() -> FastAPI:
                 "GET /health": "Health check",
                 "GET /tools": "List all available tools",
                 "POST /tools/{tool_name}": "Execute a tool",
+                "GET /tools/list": "MCP-compatible tools list",
+                "GET /resources/list": "MCP-compatible resources list", 
+                "GET /prompts/list": "MCP-compatible prompts list"
             }
         })
     
@@ -482,6 +485,34 @@ def create_http_app() -> FastAPI:
             "server": "mcp-network-tools-http",
             "version": "1.0.0"
         })
+    
+    # MCP-compatible endpoints for Claude Desktop
+    @app.get("/tools/list")
+    async def tools_list():
+        """Endpoint compatible MCP pour Claude Desktop - liste des outils"""
+        try:
+            tools_list = await handle_list_tools()
+            mcp_tools = []
+            for tool in tools_list:
+                mcp_tools.append({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "inputSchema": tool.inputSchema
+                })
+            return JSONResponse(content={"tools": mcp_tools})
+        except Exception as e:
+            logger.error(f"Erreur lors de la liste des outils: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/resources/list")
+    async def resources_list():
+        """Endpoint compatible MCP pour Claude Desktop - liste des ressources"""
+        return JSONResponse(content={"resources": []})
+
+    @app.get("/prompts/list")
+    async def prompts_list():
+        """Endpoint compatible MCP pour Claude Desktop - liste des prompts"""
+        return JSONResponse(content={"prompts": []})
     
     
     return app
