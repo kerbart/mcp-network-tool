@@ -257,7 +257,7 @@ async def main():
                     server_name="network-tools",
                     server_version="1.0.0",
                     capabilities=ServerCapabilities(
-                        tools={}
+                        tools={"listChanged": False}
                     )
                 )
             )

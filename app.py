@@ -295,7 +295,9 @@ def create_http_app() -> FastAPI:
                     "result": {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {
-                            "tools": {}
+                            "tools": {
+                                "listChanged": False
+                            }
                         },
                         "serverInfo": {
                             "name": "network-tools",
@@ -496,7 +498,7 @@ async def main():
                         server_name="network-tools",
                         server_version="1.0.0",
                         capabilities=ServerCapabilities(
-                            tools={}
+                            tools={"listChanged": False}
                         )
                     )
                 )
