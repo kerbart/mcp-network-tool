@@ -191,7 +191,7 @@ fi
 
 echo -e "${GREEN}🚀 Lancement du serveur...${NC}"
 echo -e "${BLUE}Mode par défaut: stdio (compatible Claude Desktop/Code)${NC}"
-echo -e "${BLUE}Pour le mode HTTP: python app.py --transport http${NC}"
+echo -e "${BLUE}Pour le mode HTTP: ./run.sh --transport http${NC}"
 echo -e "${BLUE}Appuyez sur Ctrl+C pour arrêter${NC}\n"
 
 # Lancer le serveur avec les arguments passés au script
