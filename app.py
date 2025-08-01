@@ -29,9 +29,11 @@ from mcp.types import (
 # Imports pour HTTP
 try:
     from fastapi import FastAPI, HTTPException
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, StreamingResponse
     import uvicorn
     from pydantic import BaseModel
+    import json
+    import asyncio
     HTTP_AVAILABLE = True
 except ImportError:
     HTTP_AVAILABLE = False
@@ -403,9 +405,62 @@ def create_http_app() -> FastAPI:
             "endpoints": {
                 "POST /": "MCP protocol endpoint",
                 "GET /": "Server information",
-                "GET /health": "Health check"
-            }
+                "GET /health": "Health check",
+                "GET /tools": "List all available tools",
+                "POST /tools/{tool_name}": "Execute a tool",
+                "GET /tools/{tool_name}/stream": "Stream tool execution via SSE",
+                "POST /tools/{tool_name}/stream": "Stream tool execution via SSE (POST)",
+                "GET /sse": "SSE endpoint for Claude Desktop"
+            },
+            "sse_support": True,
+            "sse_events": ["start", "result", "complete", "error"]
         })
+    
+    @app.get("/sse")
+    async def sse_endpoint():
+        """SSE endpoint for Claude Desktop MCP integration"""
+        async def generate_mcp_sse():
+            """Generate MCP protocol over SSE"""
+            # Send initial server capabilities
+            init_message = {
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {},
+                        "resources": {},
+                        "prompts": {}
+                    },
+                    "serverInfo": {
+                        "name": "network-tools",
+                        "version": "1.0.0"
+                    }
+                }
+            }
+            yield f"data: {json.dumps(init_message)}\n\n"
+            
+            # Keep connection alive
+            while True:
+                await asyncio.sleep(30)  # Heartbeat every 30 seconds
+                heartbeat = {
+                    "jsonrpc": "2.0",
+                    "method": "ping",
+                    "params": {}
+                }
+                yield f"data: {json.dumps(heartbeat)}\n\n"
+        
+        return StreamingResponse(
+            generate_mcp_sse(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Cache-Control, Content-Type",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS"
+            }
+        )
     
     @app.get("/tools")
     async def list_tools_http():
@@ -463,6 +518,173 @@ def create_http_app() -> FastAPI:
             "server": "mcp-network-tools-http",
             "version": "1.0.0"
         })
+    
+    @app.get("/tools/{tool_name}/stream")
+    async def stream_tool_execution(tool_name: str, 
+                                  host: str = None,
+                                  count: int = 4,
+                                  timeout: int = 5,
+                                  max_hops: int = 15,
+                                  target: str = None,
+                                  domain: str = None,
+                                  record_type: str = "A",
+                                  ports: str = "80,443,22,21,25,53,110,143,993,995",
+                                  scan_type: str = "connect",
+                                  url: str = None,
+                                  method: str = "GET",
+                                  headers: bool = True,
+                                  follow_redirects: bool = True,
+                                  protocol: str = "all",
+                                  state: str = "all"):
+        """Stream tool execution results using Server-Sent Events"""
+        
+        if tool_name not in tools:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Tool not found: {tool_name}"}
+            )
+        
+        # Build arguments based on tool type and provided parameters
+        arguments = {}
+        
+        if tool_name == "ping":
+            if not host:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "host parameter is required for ping"}
+                )
+            arguments = {"host": host, "count": count, "timeout": timeout}
+        
+        elif tool_name == "traceroute":
+            if not host:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "host parameter is required for traceroute"}
+                )
+            arguments = {"host": host, "max_hops": max_hops}
+        
+        elif tool_name == "whois":
+            if not target:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "target parameter is required for whois"}
+                )
+            arguments = {"target": target}
+        
+        elif tool_name in ["nslookup", "dig"]:
+            if not domain:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "domain parameter is required for DNS tools"}
+                )
+            arguments = {"domain": domain, "record_type": record_type}
+        
+        elif tool_name == "nmap":
+            if not host:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "host parameter is required for nmap"}
+                )
+            arguments = {"host": host, "ports": ports, "scan_type": scan_type}
+        
+        elif tool_name == "curl":
+            if not url:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "url parameter is required for curl"}
+                )
+            arguments = {"url": url, "method": method, "headers": headers, "follow_redirects": follow_redirects}
+        
+        elif tool_name == "netstat":
+            arguments = {"protocol": protocol, "state": state}
+        
+        # Validate arguments
+        if not security_validator.validate_arguments(tool_name, arguments):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid or potentially dangerous arguments"}
+            )
+        
+        async def generate_sse_stream():
+            """Generate Server-Sent Events stream"""
+            try:
+                # Send initial event
+                yield f"data: {json.dumps({'type': 'start', 'tool': tool_name, 'arguments': arguments})}\n\n"
+                
+                # Execute the tool
+                tool = tools[tool_name]
+                result = await tool.execute(arguments)
+                
+                # Send result event
+                yield f"data: {json.dumps({'type': 'result', 'data': result})}\n\n"
+                
+                # Send completion event
+                yield f"data: {json.dumps({'type': 'complete', 'status': 'success'})}\n\n"
+                
+            except Exception as e:
+                logger.error(f"Error in SSE stream for {tool_name}: {e}")
+                # Send error event
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        
+        return StreamingResponse(
+            generate_sse_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Cache-Control"
+            }
+        )
+    
+    @app.post("/tools/{tool_name}/stream")
+    async def stream_tool_execution_post(tool_name: str, request: ToolRequest):
+        """Stream tool execution results using Server-Sent Events (POST version)"""
+        
+        if tool_name not in tools:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Tool not found: {tool_name}"}
+            )
+        
+        # Validate arguments
+        if not security_validator.validate_arguments(tool_name, request.arguments):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid or potentially dangerous arguments"}
+            )
+        
+        async def generate_sse_stream():
+            """Generate Server-Sent Events stream"""
+            try:
+                # Send initial event
+                yield f"data: {json.dumps({'type': 'start', 'tool': tool_name, 'arguments': request.arguments})}\n\n"
+                
+                # Execute the tool
+                tool = tools[tool_name]
+                result = await tool.execute(request.arguments)
+                
+                # Send result event
+                yield f"data: {json.dumps({'type': 'result', 'data': result})}\n\n"
+                
+                # Send completion event
+                yield f"data: {json.dumps({'type': 'complete', 'status': 'success'})}\n\n"
+                
+            except Exception as e:
+                logger.error(f"Error in SSE stream for {tool_name}: {e}")
+                # Send error event
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        
+        return StreamingResponse(
+            generate_sse_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Cache-Control"
+            }
+        )
     
     return app
 
