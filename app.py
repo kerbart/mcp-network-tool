@@ -279,6 +279,16 @@ def create_http_app() -> FastAPI:
         version="1.0.0"
     )
     
+    # Add CORS middleware for Claude Desktop compatibility
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    
     # MCP Protocol endpoints
     @app.post("/")
     async def handle_mcp_request(request_data: dict):
@@ -295,9 +305,7 @@ def create_http_app() -> FastAPI:
                     "result": {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {
-                            "tools": {
-                                "listChanged": False
-                            }
+                            "tools": {}
                         },
                         "serverInfo": {
                             "name": "network-tools",
@@ -305,6 +313,10 @@ def create_http_app() -> FastAPI:
                         }
                     }
                 }
+            
+            elif method == "notifications/initialized":
+                # This is required by MCP protocol but doesn't need a response
+                return None
             
             elif method == "tools/list":
                 tools_list = await handle_list_tools()
@@ -387,9 +399,10 @@ def create_http_app() -> FastAPI:
                 
         except Exception as e:
             logger.error(f"MCP request handling error: {e}")
+            request_id = request_data.get("id") if isinstance(request_data, dict) else None
             return {
                 "jsonrpc": "2.0",
-                "id": request_data.get("id"),
+                "id": request_id,
                 "error": {
                     "code": -32603,
                     "message": "Internal error"
